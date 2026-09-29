@@ -1,11 +1,16 @@
 import http.server
 import json
 import os
+import sys
 import threading
 from urllib.parse import urlparse, parse_qs
 
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # Import your teammates' modules
-from dsa.parser import parse_sms_xml
+from dsa.parser import parse_file
 from api.auth import is_authorized
 
 # Global thread-safe database storage in memory
@@ -15,19 +20,16 @@ transactions_db = {}
 def load_initial_data():
     """Loads records from XML into a dictionary keyed by ID on startup."""
     global transactions_db
-    xml_path = os.path.join(os.path.dirname(__file__), '..', 'modified_sms_v2.xml')
-    if not os.path.exists(xml_path):
-        # Fallback path if XML is in root
-        xml_path = 'modified_sms_v2.xml'
+    xml_path = os.path.join(os.path.dirname(__file__), '..', 'docs', 'modified_sms_v2-1.xml')
     
     if os.path.exists(xml_path):
-        records = parse_sms_xml(xml_path)
+        records = parse_file(xml_path)
         with db_lock:
             for rec in records:
                 transactions_db[rec['id']] = rec
         print(f"Loaded {len(transactions_db)} records successfully.")
     else:
-        print("Warning: modified_sms_v2.xml not found!")
+        print(f"Warning: {xml_path} not found!")
 
 class MoMoRequestHandler(http.server.BaseHTTPRequestHandler):
     
@@ -48,8 +50,14 @@ class MoMoRequestHandler(http.server.BaseHTTPRequestHandler):
     def check_auth_or_reject(self):
         """Gatekeeper: If unauthorized, sends 401 response and returns False."""
         if not self.authenticate_request():
+            response_body = {"error": "Unauthorized: Invalid or missing credentials"}
+            encoded_body = json.dumps(response_body).encode('utf-8')
+            self.send_response(401)
             self.send_header('WWW-Authenticate', 'Basic realm="MoMo API"')
-            self.send_json(401, {"error": "Unauthorized: Invalid or missing credentials"})
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(encoded_body)))
+            self.end_headers()
+            self.wfile.write(encoded_body)
             return False
         return True
 
@@ -180,7 +188,7 @@ class MoMoRequestHandler(http.server.BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "Invalid transaction ID format"})
                 return
 
-With db_lock:
+            with db_lock:
                 if txn_id in transactions_db:
                     del transactions_db[txn_id]
                     self.send_response(204)
